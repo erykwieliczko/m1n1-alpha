@@ -2786,6 +2786,93 @@ static int dt_set_t8132_nvme(void)
     return 0;
 }
 
+/*
+ * The primary PMU moves between Apple SoCs and firmware revisions.  Locate
+ * the primary SPMI child in the live ADT and transfer only the controller
+ * range and slave ID required by Linux's fixed Abbey NVMEM description.
+ */
+static int dt_set_t8132_lifecycle(void)
+{
+    if (!fdt_get_alias(dt, "spmi-primary"))
+        return 0;
+
+    int arm_io = adt_path_offset(adt, "/arm-io");
+    if (arm_io < 0)
+        bail("ADT: /arm-io not found\n");
+
+    int spmi = -1;
+    int pmu = -1;
+    int bus = arm_io;
+    ADT_FOREACH_CHILD(adt, bus)
+    {
+        const char *name = adt_get_name(adt, bus);
+        if (strncmp(name, "nub-spmi", 8) && strncmp(name, "spmi", 4))
+            continue;
+
+        int dev = bus;
+        ADT_FOREACH_CHILD(adt, dev)
+        {
+            if (!adt_is_compatible(adt, dev, "pmu,spmi") &&
+                !adt_is_compatible(adt, dev, "pmu,d2422") &&
+                !adt_is_compatible(adt, dev, "pmu,d2449"))
+                continue;
+
+            u32 primary;
+            if (ADT_GETPROP(adt, dev, "is-primary", &primary) != sizeof(primary) || primary != 1)
+                continue;
+
+            spmi = bus;
+            pmu = dev;
+            break;
+        }
+
+        if (pmu >= 0)
+            break;
+    }
+
+    if (spmi < 0 || pmu < 0)
+        bail("ADT: primary SPMI PMU not found\n");
+
+    char spmi_path[64];
+    int ret = snprintf(spmi_path, sizeof(spmi_path), "/arm-io/%s", adt_get_name(adt, spmi));
+    if (ret < 0 || (size_t)ret >= sizeof(spmi_path))
+        bail("ADT: primary SPMI path is too long\n");
+
+    int path[8];
+    if (adt_path_offset_trace(adt, spmi_path, path) < 0)
+        bail("ADT: failed to resolve primary SPMI path\n");
+
+    u64 addr, size;
+    if (adt_get_reg(adt, path, "reg", 0, &addr, &size) < 0)
+        bail("ADT: failed to resolve primary SPMI register range\n");
+
+    ret = dt_set_adt_regs("spmi-primary", &addr, &size, 1);
+    if (ret < 0)
+        bail("FDT: failed to set primary SPMI register range: %d\n", ret);
+
+    u32 reg_len;
+    const u32 *pmu_reg = adt_getprop(adt, pmu, "reg", &reg_len);
+    if (!pmu_reg || reg_len < sizeof(*pmu_reg) || pmu_reg[0] > 0xf)
+        bail("ADT: primary SPMI PMU has an invalid slave ID\n");
+
+    const char *pmu_path = fdt_get_alias(dt, "pmu-primary");
+    if (!pmu_path)
+        bail("FDT: primary PMU alias not found\n");
+    int pmu_node = fdt_path_offset(dt, pmu_path);
+    if (pmu_node < 0)
+        bail("FDT: primary PMU node not found\n");
+
+    fdt32_t pmu_fdt_reg[2];
+    fdt32_st(&pmu_fdt_reg[0], pmu_reg[0]);
+    fdt32_st(&pmu_fdt_reg[1], 0); /* SPMI_USID */
+    ret = fdt_setprop(dt, pmu_node, "reg", pmu_fdt_reg, sizeof(pmu_fdt_reg));
+    if (ret < 0)
+        bail("FDT: failed to set primary PMU slave ID: %d\n", ret);
+
+    printf("FDT: Transferred primary T8132 SPMI/PMU resources from ADT\n");
+    return 0;
+}
+
 void kboot_set_initrd(void *start, size_t size)
 {
     initrd_start = start;
@@ -3016,6 +3103,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_pmgr())
         return -1;
     if (dt_set_t8132_nvme())
+        return -1;
+    if (dt_set_t8132_lifecycle())
         return -1;
 #ifndef RELEASE
     if (dt_transfer_virtios())
