@@ -2677,6 +2677,115 @@ static int dt_set_pmgr(void)
     return 0;
 }
 
+static int dt_set_adt_regs(const char *alias, const u64 *addrs, const u64 *sizes,
+                           size_t count)
+{
+    const char *path = fdt_get_alias(dt, alias);
+    if (!path)
+        return -FDT_ERR_NOTFOUND;
+
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        return node;
+
+    fdt64_t regs[6];
+    if (count > ARRAY_SIZE(regs) / 2)
+        return -FDT_ERR_BADVALUE;
+
+    for (size_t i = 0; i < count; ++i) {
+        fdt64_st(&regs[2 * i], addrs[i]);
+        fdt64_st(&regs[2 * i + 1], sizes[i]);
+    }
+
+    return fdt_setprop(dt, node, "reg", regs, count * 2 * sizeof(*regs));
+}
+
+static int dt_set_adt_irqs(const char *alias, const u32 *irqs, size_t count)
+{
+    const char *path = fdt_get_alias(dt, alias);
+    if (!path)
+        return -FDT_ERR_NOTFOUND;
+
+    int node = fdt_path_offset(dt, path);
+    if (node < 0)
+        return node;
+
+    fdt32_t cells[12];
+    if (count > ARRAY_SIZE(cells) / 3)
+        return -FDT_ERR_BADVALUE;
+
+    for (size_t i = 0; i < count; ++i) {
+        fdt32_st(&cells[3 * i], 0); /* AIC_IRQ */
+        fdt32_st(&cells[3 * i + 1], irqs[i]);
+        fdt32_st(&cells[3 * i + 2], 4); /* IRQ_TYPE_LEVEL_HIGH */
+    }
+
+    return fdt_setprop(dt, node, "interrupts", cells, count * 3 * sizeof(*cells));
+}
+
+/*
+ * M4 exposes a separate NVMMU window.  Its physical layout is supplied by
+ * iBoot's live ADT, so transfer it instead of encoding machine-specific
+ * addresses in the Linux devicetree.
+ */
+static int dt_set_t8132_nvme(void)
+{
+    if (!fdt_get_alias(dt, "ans"))
+        return 0;
+
+    int ans_path[8];
+    int ans = adt_path_offset_trace(adt, "/arm-io/ans", ans_path);
+    if (ans < 0)
+        bail("ADT: /arm-io/ans not found\n");
+    if (!adt_get_property(adt, ans, "nvme-secure-bar"))
+        bail("ADT: ANS is missing the separate NVMe register layout\n");
+
+    u64 ans_addr, ans_size, nvmmu_addr, nvmmu_size, nvme_addr, nvme_size;
+    if (adt_get_reg(adt, ans_path, "reg", 0, &ans_addr, &ans_size) < 0 ||
+        adt_get_reg(adt, ans_path, "reg", 3, &nvmmu_addr, &nvmmu_size) < 0 ||
+        adt_get_reg(adt, ans_path, "reg", 9, &nvme_addr, &nvme_size) < 0)
+        bail("ADT: failed to resolve T8132 ANS register ranges\n");
+
+    const u64 nvme_addrs[] = {nvme_addr, nvmmu_addr, ans_addr};
+    const u64 nvme_sizes[] = {nvme_size, nvmmu_size, ans_size};
+    int ret = dt_set_adt_regs("ans", nvme_addrs, nvme_sizes, ARRAY_SIZE(nvme_addrs));
+    if (ret < 0)
+        bail("FDT: failed to set ANS register ranges: %d\n", ret);
+
+    const u64 mbox_addrs[] = {ans_addr + 0x8000};
+    const u64 mbox_sizes[] = {0x4000};
+    ret = dt_set_adt_regs("ans-mbox", mbox_addrs, mbox_sizes, 1);
+    if (ret < 0)
+        bail("FDT: failed to set ANS mailbox range: %d\n", ret);
+
+    int sart_path[8];
+    if (adt_path_offset_trace(adt, "/arm-io/sart-ans", sart_path) < 0)
+        bail("ADT: /arm-io/sart-ans not found\n");
+    u64 sart_addr, sart_size;
+    if (adt_get_reg(adt, sart_path, "reg", 0, &sart_addr, &sart_size) < 0)
+        bail("ADT: failed to resolve ANS SART range\n");
+    ret = dt_set_adt_regs("sart-ans", &sart_addr, &sart_size, 1);
+    if (ret < 0)
+        bail("FDT: failed to set ANS SART range: %d\n", ret);
+
+    u32 irq_len;
+    const u32 *irqs = adt_getprop(adt, ans, "interrupts", &irq_len);
+    if (!irqs || irq_len < 5 * sizeof(*irqs) || irq_len % sizeof(*irqs))
+        bail("ADT: invalid ANS interrupt list\n");
+
+    ret = dt_set_adt_irqs("ans-mbox", irqs, 4);
+    if (ret < 0)
+        bail("FDT: failed to set ANS mailbox interrupts: %d\n", ret);
+
+    /* The controller interrupt follows the four ASC mailbox interrupts. */
+    ret = dt_set_adt_irqs("ans", &irqs[4], 1);
+    if (ret < 0)
+        bail("FDT: failed to set NVMe interrupt: %d\n", ret);
+
+    printf("FDT: Transferred T8132 ANS/NVMMU/SART resources from ADT\n");
+    return 0;
+}
+
 void kboot_set_initrd(void *start, size_t size)
 {
     initrd_start = start;
@@ -2905,6 +3014,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_isp_fwdata())
         return -1;
     if (dt_set_pmgr())
+        return -1;
+    if (dt_set_t8132_nvme())
         return -1;
 #ifndef RELEASE
     if (dt_transfer_virtios())
