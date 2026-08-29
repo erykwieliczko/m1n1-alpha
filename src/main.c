@@ -157,8 +157,15 @@ void m1n1_main(void)
     mcc_init();
     mmu_init();
     aic_init();
+    wdt_checkpoint("MMU and AIC initialization complete");
 #endif
-    wdt_disable();
+    if (wdt_primary_is_active()) {
+        printf("J713 clean-room m1n1: primary WD1 lease active\n");
+        if (wdt_set_timeout_ms(10000, NULL) < 0)
+            panic("Failed to establish the J713 stage-2 WD1 lease\n");
+    } else {
+        wdt_disable();
+    }
 #ifndef BRINGUP
     pmgr_init();
 #ifdef USE_DEBUG_USB
@@ -172,6 +179,7 @@ void m1n1_main(void)
     // On idevice we need to always clear, because otherwise it looks scuffed on white devices
     fb_init(!is_mac);
     fb_display_logo();
+    wdt_checkpoint("framebuffer initialization complete");
 #ifdef FB_SILENT_MODE
     fb_set_active(!cur_boot_args.video.display);
 #else
@@ -192,6 +200,8 @@ void m1n1_main(void)
     }
 
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
+
+    wdt_checkpoint("next-stage payload prepared");
 
     nvme_shutdown();
     exception_shutdown();

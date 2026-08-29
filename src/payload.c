@@ -14,6 +14,7 @@
 #include "mitigations.h"
 #include "smp.h"
 #include "utils.h"
+#include "wdt.h"
 
 #include "libfdt/libfdt.h"
 #include "minilzlib/minlzma.h"
@@ -346,6 +347,8 @@ int payload_run(void)
             printf("Failed to prepare FDT!\n");
             return -1;
         }
+
+        wdt_checkpoint("FDT preparation complete");
 
         return kboot_boot(kernel);
     } else if (kernel && !fdt) {

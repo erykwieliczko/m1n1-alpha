@@ -11,6 +11,7 @@
 #include "uart.h"
 #include "utils.h"
 #include "xnuboot.h"
+#include "wdt.h"
 
 u64 boot_args_addr;
 struct boot_args cur_boot_args;
@@ -171,6 +172,8 @@ void _start_c(void *boot_args, void *base)
     adt =
         (void *)(((u64)cur_boot_args.devtree) - cur_boot_args.virt_base + cur_boot_args.phys_base);
 
+    wdt_init();
+
 #ifndef BRINGUP
     int node = adt_path_offset(adt, "/cpus");
     if (node >= 0) {
@@ -204,6 +207,7 @@ void _start_c(void *boot_args, void *base)
 
     printf("CPU init (MIDR: 0x%lx smp_id:0x%x)...\n", mrs(MIDR_EL1), smp_id());
     init_cpu();
+    wdt_checkpoint("CPU initialization complete");
     printf("\n");
 
     printf("boot_args at %p\n", boot_args);
