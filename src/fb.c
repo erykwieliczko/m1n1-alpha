@@ -104,14 +104,25 @@ static void fb_move_font_row(u32 dst, u32 src)
     fb_clear_font_row(src);
 }
 
+static inline u32 component_8_to_10(u8 component)
+{
+    return ((u32)component << 2) | (component >> 6);
+}
+
+static inline u8 component_10_to_8(u32 component)
+{
+    return (component * 255 + 511) / 1023;
+}
+
 static inline u32 rgb2pixel_30(rgb_t c)
 {
-    return (c.b << 2) | (c.g << 12) | (c.r << 22);
+    return component_8_to_10(c.b) | (component_8_to_10(c.g) << 10) | (component_8_to_10(c.r) << 20);
 }
 
 static inline rgb_t pixel2rgb_30(u32 c)
 {
-    return (rgb_t){(c >> 22) & 0xff, (c >> 12) & 0xff, c >> 2};
+    return (rgb_t){component_10_to_8((c >> 20) & 0x3ff), component_10_to_8((c >> 10) & 0x3ff),
+                   component_10_to_8(c & 0x3ff)};
 }
 
 static inline u32 rgb2pixel_24(rgb_t c)

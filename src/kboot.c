@@ -72,6 +72,11 @@ void get_notchless_fb(u64 *fb_base, u64 *fb_height)
     *fb_base = cur_boot_args.video.base;
     *fb_height = cur_boot_args.video.height;
 
+    if (!cur_boot_args.video.width || !cur_boot_args.video.height || !cur_boot_args.video.stride) {
+        printf("FDT: Invalid framebuffer geometry\n");
+        return;
+    }
+
     int node = adt_path_offset(adt, "/product");
 
     if (node < 0) {
@@ -92,7 +97,7 @@ void get_notchless_fb(u64 *fb_base, u64 *fb_height)
     if (chip_id == T8015 && (board_id == 0x6 || board_id == 0xe))
         new_height = 2346;
 
-    if (new_height == cur_boot_args.video.height) {
+    if (new_height >= cur_boot_args.video.height) {
         printf("FDT: Notch detected, but display aspect is already 16:%lu?\n", hfrac);
         return;
     }
@@ -101,6 +106,12 @@ void get_notchless_fb(u64 *fb_base, u64 *fb_height)
 
     printf("display: Hiding notch, %lux%lu -> %lux%lu (+%lu, 16:%lu)\n", cur_boot_args.video.width,
            cur_boot_args.video.height, cur_boot_args.video.width, new_height, offset, hfrac);
+
+    if (offset > UINT64_MAX / cur_boot_args.video.stride ||
+        cur_boot_args.video.stride * offset > UINT64_MAX - *fb_base) {
+        printf("FDT: Notchless framebuffer address overflows\n");
+        return;
+    }
 
     *fb_base += cur_boot_args.video.stride * offset;
     *fb_height = new_height;
@@ -180,11 +191,6 @@ static int dt_set_rng_seed_adt(int node)
 
 static int dt_set_fb(void)
 {
-    if (!cur_boot_args.video.base) {
-        printf("FDT: Framebuffer unavailable, skipping framebuffer initialization");
-        return 0;
-    }
-
     int fb = fdt_path_offset(dt, "/chosen/framebuffer");
 
     if (fb < 0) {
@@ -192,9 +198,61 @@ static int dt_set_fb(void)
         return 0;
     }
 
+    if (fdt_setprop_string(dt, fb, "status", "disabled"))
+        bail("FDT: couldn't disable framebuffer\n");
+
+    if (!cur_boot_args.video.base) {
+        printf("FDT: Framebuffer unavailable, leaving disabled\n");
+        return 0;
+    }
+
+    const char *format;
+    u64 bytes_per_pixel;
+
+    switch (cur_boot_args.video.depth & 0xff) {
+        case 32:
+            format = "x8r8g8b8";
+            bytes_per_pixel = 4;
+            break;
+        case 30:
+            format = "x2r10g10b10";
+            bytes_per_pixel = 4;
+            break;
+        case 16:
+            format = "r5g6b5";
+            bytes_per_pixel = 2;
+            break;
+        default:
+            printf("FDT: unsupported fb depth %lu, leaving disabled\n", cur_boot_args.video.depth);
+            return 0;
+    }
+
+    if (!cur_boot_args.video.width || !cur_boot_args.video.height || !cur_boot_args.video.stride ||
+        cur_boot_args.video.width > UINT32_MAX || cur_boot_args.video.height > UINT32_MAX ||
+        cur_boot_args.video.stride > UINT32_MAX ||
+        cur_boot_args.video.width > UINT64_MAX / bytes_per_pixel ||
+        cur_boot_args.video.stride < cur_boot_args.video.width * bytes_per_pixel ||
+        cur_boot_args.video.stride % bytes_per_pixel) {
+        printf("FDT: invalid framebuffer geometry, leaving disabled\n");
+        return 0;
+    }
+
     u64 fb_base, fb_height;
     get_notchless_fb(&fb_base, &fb_height);
+
+    if (!fb_height || fb_height > cur_boot_args.video.height ||
+        fb_height > UINT64_MAX / cur_boot_args.video.stride) {
+        printf("FDT: invalid visible framebuffer height, leaving disabled\n");
+        return 0;
+    }
+
     u64 fb_size = cur_boot_args.video.stride * fb_height;
+
+    if (fb_size > UINT64_MAX - fb_base) {
+        printf("FDT: framebuffer range overflows, leaving disabled\n");
+        return 0;
+    }
+
     u64 fbreg[2] = {cpu_to_fdt64(fb_base), cpu_to_fdt64(fb_size)};
     char fbname[32];
 
@@ -215,27 +273,11 @@ static int dt_set_fb(void)
     if (fdt_setprop_u32(dt, fb, "stride", cur_boot_args.video.stride))
         bail("FDT: couldn't set framebuffer stride\n");
 
-    const char *format = NULL;
-
-    switch (cur_boot_args.video.depth & 0xff) {
-        case 32:
-            format = "x8r8g8b8";
-            break;
-        case 30:
-            format = "x2r10g10b10";
-            break;
-        case 16:
-            format = "r5g6b5";
-            break;
-        default:
-            printf("FDT: unsupported fb depth %lu, not enabling\n", cur_boot_args.video.depth);
-            return 0; // Do not error out, but don't set the FB
-    }
-
     if (fdt_setprop_string(dt, fb, "format", format))
         bail("FDT: couldn't set framebuffer format\n");
 
-    fdt_delprop(dt, fb, "status"); // may fail if it does not exist
+    if (fdt_setprop_string(dt, fb, "status", "okay"))
+        bail("FDT: couldn't enable framebuffer\n");
 
     printf("FDT: %s base 0x%lx size 0x%lx\n", fbname, fb_base, fb_size);
 
@@ -243,12 +285,16 @@ static int dt_set_fb(void)
     // range already.
 
     // save notch height in the dcp node if present
-    if (cur_boot_args.video.height - fb_height) {
-        int dcp = fdt_path_offset(dt, "dcp");
-        if (dcp >= 0)
-            if (fdt_appendprop_u32(dt, dcp, "apple,notch-height",
-                                   cur_boot_args.video.height - fb_height))
+    int dcp = fdt_path_offset(dt, "dcp");
+    if (dcp >= 0) {
+        u64 notch_height = cur_boot_args.video.height - fb_height;
+
+        if (notch_height) {
+            if (fdt_setprop_u32(dt, dcp, "apple,notch-height", notch_height))
                 printf("FDT: couldn't set apple,notch-height\n");
+        } else {
+            fdt_delprop(dt, dcp, "apple,notch-height");
+        }
     }
 
     return 0;
