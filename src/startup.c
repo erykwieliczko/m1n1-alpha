@@ -5,13 +5,15 @@
 #include "dockchannel_uart.h"
 #include "exception.h"
 #include "firmware.h"
+#include "iodev.h"
 #include "smp.h"
 #include "string.h"
 #include "types.h"
 #include "uart.h"
+#include "usb_dwc3_handoff.h"
 #include "utils.h"
-#include "xnuboot.h"
 #include "wdt.h"
+#include "xnuboot.h"
 
 u64 boot_args_addr;
 struct boot_args cur_boot_args;
@@ -160,8 +162,12 @@ void dump_boot_args(struct boot_args *ba)
 }
 
 extern void get_device_info(void);
-void _start_c(void *boot_args, void *base)
+void _start_c(void *boot_args, void *base, u64 entry_arg1, u64 entry_arg2, u64 entry_arg3,
+              u64 entry_arg4)
 {
+    const u64 entry_args[] = {entry_arg1, entry_arg2, entry_arg3, entry_arg4};
+    enum usb_dwc3_handoff_result handoff_result;
+
     UNUSED(base);
     u32 cpu_id = 0;
 
@@ -207,8 +213,20 @@ void _start_c(void *boot_args, void *base)
 
     printf("CPU init (MIDR: 0x%lx smp_id:0x%x)...\n", mrs(MIDR_EL1), smp_id());
     init_cpu();
-    wdt_checkpoint("CPU initialization complete");
     printf("\n");
+
+    handoff_result = usb_dwc3_handoff_adopt(entry_args, ARRAY_SIZE(entry_args));
+    if (handoff_result == USB_DWC3_HANDOFF_INVALID)
+        panic("Unable to adopt inherited DWC3 console\n");
+    if (handoff_result == USB_DWC3_HANDOFF_ADOPTED) {
+        printf("J713 clean-room stage2: inherited DWC3 console adopted\n");
+        iodev_console_flush();
+        if (!usb_dwc3_handoff_console_healthy())
+            panic("Inherited DWC3 console failed before the stage2 banner completed\n");
+        wdt_checkpoint("CPU initialization and inherited DWC3 adoption complete");
+    } else {
+        wdt_checkpoint("CPU initialization complete");
+    }
 
     printf("boot_args at %p\n", boot_args);
 

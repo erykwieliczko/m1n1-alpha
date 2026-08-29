@@ -66,6 +66,10 @@ _vectors_start:
 .type _start, @function
 _start:
     mov x19, x0
+    mov x21, x1
+    mov x22, x2
+    mov x23, x3
+    mov x24, x4
 
     mov w0, 'm'
     bl debug_putc
@@ -103,6 +107,10 @@ _start:
 
     mov x0, x19
     mov x1, x20
+    mov x2, x21
+    mov x3, x22
+    mov x4, x23
+    mov x5, x24
     bl _start_c
     b .
 
@@ -112,6 +120,10 @@ start_el3:
     mov sp, x8
     mov x0, x19
     mov x1, x20
+    mov x2, x21
+    mov x3, x22
+    mov x4, x23
+    mov x5, x24
     msr tpidr_el3, xzr
     adrp x6, _stack_bot
     adr x7, _start_c
