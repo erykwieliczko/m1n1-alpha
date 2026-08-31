@@ -25,7 +25,6 @@
 #include "tunables.h"
 #include "types.h"
 #include "usb.h"
-#include "usb_dwc3_handoff.h"
 #include "utils.h"
 #include "xnuboot.h"
 
@@ -359,9 +358,6 @@ static int dt_set_chosen(void)
 
     if (fdt_setprop(dt, node, "asahi,m1n1-stage2-version", m1n1_version, strlen(m1n1_version) + 1))
         bail("FDT: couldn't set asahi,m1n1-stage2-version\n");
-
-    if (usb_dwc3_handoff_publish_fdt(dt, node))
-        bail("FDT: couldn't publish inherited DWC3 handoff\n");
 
     if (dt_set_rng_seed_sep(node))
         return dt_set_rng_seed_adt(node);

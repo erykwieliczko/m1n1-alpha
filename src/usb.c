@@ -11,7 +11,6 @@
 #include "tps6598x.h"
 #include "types.h"
 #include "usb_dwc3.h"
-#include "usb_dwc3_handoff.h"
 #include "usb_dwc3_regs.h"
 #include "utils.h"
 #include "vsprintf.h"
@@ -258,8 +257,7 @@ static tps6598x_dev_t *hpm_init(i2c_dev_t *i2c, const char *hpm_path)
 void usb_spmi_init(void)
 {
     for (int idx = 0; idx < USB_IODEV_COUNT; ++idx)
-        if (!usb_dwc3_handoff_owns_controller(idx))
-            usb_phy_bringup(idx); /* Fails on missing devices, just continue */
+        usb_phy_bringup(idx); /* Fails on missing devices, just continue */
 
     usb_is_initialized = true;
 }
@@ -347,8 +345,7 @@ void usb_init(void)
         return;
 
     for (int idx = 0; idx < USB_IODEV_COUNT; ++idx)
-        if (!usb_dwc3_handoff_owns_controller(idx))
-            usb_phy_bringup(idx); /* Fails on missing devices, just continue */
+        usb_phy_bringup(idx); /* Fails on missing devices, just continue */
 
     usb_is_initialized = true;
 }
@@ -432,9 +429,6 @@ void usb_iodev_init(void)
         dwc3_dev_t *opaque;
         struct iodev *usb_iodev;
 
-        if (usb_dwc3_handoff_owns_controller(i))
-            continue;
-
         opaque = usb_iodev_bringup(i);
         if (!opaque)
             continue;
@@ -456,9 +450,6 @@ void usb_iodev_init(void)
 void usb_iodev_shutdown(void)
 {
     for (int i = FIRST_USB_IODEV; i < USB_IODEV_COUNT; i++) {
-        if (usb_dwc3_handoff_owns_controller(i))
-            continue;
-
         struct iodev *usb_iodev = iodev_unregister_device(IODEV_USB0 + i);
         if (!usb_iodev)
             continue;
@@ -472,8 +463,6 @@ void usb_iodev_shutdown(void)
 void usb_iodev_vuart_setup(iodev_id_t iodev)
 {
     if (iodev < IODEV_USB0 || iodev >= IODEV_USB0 + USB_IODEV_COUNT)
-        return;
-    if (usb_dwc3_handoff_is_iodev(iodev))
         return;
 
     iodev_usb_vuart.opaque = iodev_get_opaque(iodev);

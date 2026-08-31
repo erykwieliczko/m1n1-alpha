@@ -27,7 +27,6 @@
 #include "uart.h"
 #include "uartproxy.h"
 #include "usb.h"
-#include "usb_dwc3_handoff.h"
 #include "utils.h"
 #include "wdt.h"
 #include "xnuboot.h"
@@ -151,8 +150,6 @@ void m1n1_main(void)
     firmware_init();
 
     heapblock_init();
-    if (usb_dwc3_handoff_protect_heap() < 0)
-        panic("Inherited DWC3 allocations overlap the stage2 heap\n");
 
 #ifndef BRINGUP
     if (supports_gxf())
@@ -163,7 +160,9 @@ void m1n1_main(void)
     wdt_checkpoint("MMU and AIC initialization complete");
 #endif
     if (wdt_primary_is_active()) {
-        printf("J713 clean-room m1n1: inherited primary WD1 lease active\n");
+        printf("J713 clean-room m1n1: primary WD1 lease active\n");
+        if (wdt_set_timeout_ms(10000, NULL) < 0)
+            panic("Failed to establish the J713 stage-2 WD1 lease\n");
     } else {
         wdt_disable();
     }
@@ -216,8 +215,6 @@ void m1n1_main(void)
 #endif
 
     printf("Vectoring to next stage...\n");
-
-    usb_dwc3_handoff_prepare_next_stage();
 
     next_stage.entry(next_stage.args[0], next_stage.args[1], next_stage.args[2], next_stage.args[3],
                      next_stage.args[4]);
