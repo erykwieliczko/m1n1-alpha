@@ -233,6 +233,13 @@ void wdt_init(void)
     if (!is_j713_t8132())
         return;
 
+    if (!(read32(wdt_base + WDT_CTL) & WDT_RESET_ENABLE)) {
+        if (wdt_disable_primary() < 0)
+            panic("Failed to preserve disabled J713 primary WD1 state\n");
+        printf("J713 primary WD1 inherited disabled\n");
+        return;
+    }
+
     wdt_clock_hz = wdt_get_clock_from_adt();
     if (!wdt_clock_hz)
         wdt_clock_hz = J713_WD1_CLOCK_HZ;
