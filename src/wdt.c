@@ -27,6 +27,21 @@ static void wdt_barrier(void)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
+static int wdt_disable_primary(void)
+{
+    if (!wdt_base)
+        return -1;
+
+    write32(wdt_base + WDT_CTL, 0);
+    wdt_barrier();
+    if (read32(wdt_base + WDT_CTL) != 0)
+        return -1;
+
+    primary_wdt_active = false;
+    wdt_alarm_ticks = 0;
+    return 0;
+}
+
 #ifndef CHAINLOADING
 static bool is_j713_t8132(void)
 {
@@ -209,7 +224,12 @@ void wdt_init(void)
 
     wdt_disable_auxiliary(node);
 
-#ifndef CHAINLOADING
+#ifdef CHAINLOADING
+    printf("Primary WDT register @ 0x%lx\n", wdt_base);
+    if (wdt_disable_primary() < 0)
+        panic("Failed to disable primary WDT during stage-1 startup\n");
+    printf("Primary WDT disabled\n");
+#else
     if (!is_j713_t8132())
         return;
 
@@ -240,12 +260,8 @@ void wdt_disable(void)
     }
 
     printf("Primary WDT register @ 0x%lx\n", wdt_base);
-    write32(wdt_base + WDT_CTL, 0);
-    wdt_barrier();
-    if (read32(wdt_base + WDT_CTL) != 0)
+    if (wdt_disable_primary() < 0)
         panic("Failed to disable primary WDT\n");
-    primary_wdt_active = false;
-    wdt_alarm_ticks = 0;
     printf("Primary WDT disabled\n");
 
     wdt_disable_auxiliary(node);
