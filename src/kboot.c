@@ -2875,6 +2875,20 @@ void kboot_set_initrd(void *start, size_t size)
     initrd_size = size;
 }
 
+int kboot_set_chosen_u64_inplace(const char *name, u64 value)
+{
+    int node;
+
+    if (!dt || !name)
+        return -1;
+
+    node = fdt_path_offset(dt, "/chosen");
+    if (node < 0)
+        return node;
+
+    return fdt_setprop_inplace_u64(dt, node, name, value);
+}
+
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
