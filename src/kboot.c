@@ -2726,7 +2726,8 @@ static int dt_set_adt_irqs(const char *alias, const u32 *irqs, size_t count)
  */
 static int dt_set_t8132_nvme(void)
 {
-    if (!fdt_get_alias(dt, "ans"))
+    const char *ans_dt_path = fdt_get_alias(dt, "ans");
+    if (!ans_dt_path)
         return 0;
 
     int ans_path[8];
@@ -2747,6 +2748,10 @@ static int dt_set_t8132_nvme(void)
     int ret = dt_set_adt_regs("ans", nvme_addrs, nvme_sizes, ARRAY_SIZE(nvme_addrs));
     if (ret < 0)
         bail("FDT: failed to set ANS register ranges: %d\n", ret);
+
+    int ans_dt = fdt_path_offset(dt, ans_dt_path);
+    if (ans_dt < 0 || fdt_setprop_string(dt, ans_dt, "status", "okay") < 0)
+        bail("FDT: failed to enable T8132 ANS\n");
 
     const u64 mbox_addrs[] = {ans_addr + 0x8000};
     const u64 mbox_sizes[] = {0x4000};
