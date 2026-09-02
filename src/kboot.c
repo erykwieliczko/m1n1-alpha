@@ -497,6 +497,45 @@ static int dt_set_memory(void)
     return 0;
 }
 
+static int dt_reserve_bootloader_handoff(void)
+{
+    int node;
+
+    while ((node = fdt_node_offset_by_compatible(
+                dt, -1, "linux-enablement-mac,resident-bootloader")) >= 0) {
+        int len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+        if (!reg || len != 2 * (int)sizeof(*reg)) {
+            printf("FDT: invalid resident bootloader range on %s\n", fdt_get_name(dt, node, NULL));
+            return -1;
+        }
+
+        u64 start = fdt64_ld(&reg[0]);
+        u64 size = fdt64_ld(&reg[1]);
+        if (!size || (start | size) & (SZ_16K - 1)) {
+            printf("FDT: unaligned resident bootloader range on %s\n",
+                   fdt_get_name(dt, node, NULL));
+            return -1;
+        }
+
+        if (fdt_add_mem_rsv(dt, start, size))
+            return -1;
+
+        printf("FDT: reserved described bootloader handoff 0x%lx..0x%lx\n", start, start + size);
+
+        /*
+         * This node is packaging metadata, not an OS reserved-memory region.
+         * In particular it may cover the running kernel and initramfs, so a
+         * no-map property would make the handoff image itself inaccessible.
+         * Consume it after promoting the range to the FDT reservation map.
+         */
+        if (fdt_del_node(dt, node))
+            return -1;
+    }
+
+    return 0;
+}
+
 static int dt_set_serial_number(void)
 {
 
@@ -3061,6 +3100,9 @@ int kboot_prepare_dt(void *fdt)
 
     if (fdt_add_mem_rsv(dt, (u64)_base, ((u64)_end) - ((u64)_base)))
         bail("FDT: couldn't add reservation for m1n1\n");
+
+    if (dt_reserve_bootloader_handoff())
+        bail("FDT: couldn't reserve described bootloader handoff\n");
 
     /* setup console log buffer early to capture as much log as possible */
     dt_setup_mtd_phram();
