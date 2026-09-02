@@ -3184,7 +3184,13 @@ int kboot_boot(void *kernel)
     clk_init();
 
     usb_init();
-    pcie_init();
+    int described_pcie = pcie_prepare_fdt(dt);
+    if (described_pcie < 0)
+        panic("Failed to enable described PCIe endpoint power\n");
+    if (pcie_init() && described_pcie)
+        panic("Failed to initialize described PCIe endpoint\n");
+    if (pcie_handoff_fdt(dt) < 0)
+        panic("Failed to prepare described PCIe endpoint DMA\n");
     dapf_init_all();
 
     printf("Setting SMP mode to WFE...\n");
