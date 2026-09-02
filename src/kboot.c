@@ -3069,6 +3069,27 @@ int kboot_prepare_dt(void *fdt)
     /* setup console log buffer early to capture as much log as possible */
     dt_setup_mtd_phram();
 
+    /*
+     * A RAM chainload can extend beyond m1n1's own image and contains pages
+     * that remain live through the U-Boot and EFI handoff.  Keep the complete
+     * producer-supplied high-water interval out of Linux's page allocator.
+     */
+    {
+        char node_name[64];
+        u64 protected_start = ALIGN_UP((u64)adt + cur_boot_args.devtree_size, SZ_16K);
+        u64 protected_end = cur_boot_args.top_of_kernel_data;
+
+        protected_start = min(protected_start, (u64)_base);
+        if (protected_end > protected_start) {
+            snprintf(node_name, sizeof(node_name), "m1n1-chainload@%lx", protected_start);
+            if (dt_get_or_add_reserved_mem(node_name,
+                                           "linux-enablement-mac,m1n1-chainload",
+                                           true, protected_start,
+                                           protected_end - protected_start) < 0)
+                bail("FDT: couldn't reserve the complete m1n1 chainload image\n");
+        }
+    }
+
     if (dt_set_chosen())
         return -1;
     if (dt_set_uboot_config())
