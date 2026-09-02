@@ -9,13 +9,12 @@
 #include "types.h"
 #include "utils.h"
 
-#define WDT_COUNT 0x10
-#define WDT_ALARM 0x14
-#define WDT_CTL   0x1c
+#define WDT_COUNT        0x10
+#define WDT_ALARM        0x14
+#define WDT_CTL          0x1c
 #define WDT_RESET_ENABLE BIT(2)
 
-#define J713_WD1_CLOCK_HZ       24000000ULL
-#define J713_PRIMARY_TIMEOUT_MS 10000
+#define J713_WD1_CLOCK_HZ 24000000ULL
 
 static u64 wdt_base = 0;
 static u64 wdt_clock_hz = 0;
@@ -49,8 +48,7 @@ static bool is_j713_t8132(void)
     u32 adt_chip_id = 0;
     const char *target = adt_getprop(adt, 0, "target-type", NULL);
 
-    if (chosen < 0 || ADT_GETPROP(adt, chosen, "chip-id", &adt_chip_id) < 0 ||
-        adt_chip_id != T8132)
+    if (chosen < 0 || ADT_GETPROP(adt, chosen, "chip-id", &adt_chip_id) < 0 || adt_chip_id != T8132)
         return false;
 
     return (target && (!strcmp(target, "J713AP") || !strcmp(target, "J713"))) ||
@@ -168,8 +166,7 @@ int wdt_set_timeout_ms(u64 timeout_ms, u32 *effective_ticks)
     write32(wdt_base + WDT_CTL, WDT_RESET_ENABLE);
     wdt_barrier();
 
-    if (read32(wdt_base + WDT_ALARM) != ticks ||
-        read32(wdt_base + WDT_CTL) != WDT_RESET_ENABLE)
+    if (read32(wdt_base + WDT_ALARM) != ticks || read32(wdt_base + WDT_CTL) != WDT_RESET_ENABLE)
         return -1;
 
     wdt_alarm_ticks = ticks;
@@ -244,11 +241,12 @@ void wdt_init(void)
     if (!wdt_clock_hz)
         wdt_clock_hz = J713_WD1_CLOCK_HZ;
 
-    primary_wdt_active = true;
-    if (wdt_set_timeout_ms(J713_PRIMARY_TIMEOUT_MS, NULL) < 0) {
-        primary_wdt_active = false;
-        panic("Failed to establish the J713 primary WD1 lease\n");
-    }
+    wdt_alarm_ticks = read32(wdt_base + WDT_ALARM);
+    primary_wdt_active = read32(wdt_base + WDT_CTL) == WDT_RESET_ENABLE && wdt_alarm_ticks;
+    if (primary_wdt_active)
+        printf("Inherited primary WD1 lease: 0x%x ticks\n", wdt_alarm_ticks);
+    else
+        wdt_alarm_ticks = 0;
 #endif
 }
 
