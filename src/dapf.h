@@ -4,6 +4,7 @@
 #define DAPF_H
 
 int dapf_init_all(void);
+int dapf_init_all_fdt(void *dt);
 int dapf_init(const char *path, int index);
 
 #endif

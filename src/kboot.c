@@ -3191,7 +3191,11 @@ int kboot_boot(void *kernel)
         panic("Failed to initialize described PCIe endpoint\n");
     if (pcie_handoff_fdt(dt) < 0)
         panic("Failed to prepare described PCIe endpoint DMA\n");
-    dapf_init_all();
+    int dapf_result = dapf_init_all_fdt(dt);
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (dapf_result < 0 && chosen >= 0 &&
+        fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL))
+        panic("Failed to prepare described DAPF handoff\n");
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);

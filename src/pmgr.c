@@ -287,6 +287,45 @@ int pmgr_adt_power_disable_index(const char *path, u32 index)
     return pmgr_adt_device_set_mode(path, index, PMGR_PS_PWRGATE, false);
 }
 
+int pmgr_adt_is_powered(const char *path)
+{
+    if (!pmgr_initialized) {
+        printf("pmgr: pmgr_adt_is_powered() called before successful pmgr_init()\n");
+        return -1;
+    }
+
+    int node = adt_path_offset(adt, path);
+    if (node < 0)
+        return -1;
+
+    u32 len;
+    const u32 *devices = adt_getprop(adt, node, "clock-gates", &len);
+    if (!devices || !len)
+        return 1;
+    if (len % sizeof(*devices))
+        return -1;
+
+    for (u32 i = 0; i < len / sizeof(*devices); i++) {
+        const struct pmgr_device *device;
+        u16 id = FIELD_GET(PMGR_DEVICE_ID, devices[i]);
+        u8 die = FIELD_GET(PMGR_DIE_ID, devices[i]);
+
+        if (pmgr_find_device(id, &device))
+            return -1;
+        if (device->flags & PMGR_FLAG_VIRTUAL)
+            continue;
+
+        uintptr_t addr = pmgr_device_get_addr(die, device);
+        if (!addr)
+            return -1;
+
+        if (FIELD_GET(PMGR_PS_ACTUAL, read32(addr)) != PMGR_PS_ACTIVE)
+            return 0;
+    }
+
+    return 1;
+}
+
 static int pmgr_reset_device(int die, const struct pmgr_device *dev)
 {
     if (die < 0 || die > 16) {
