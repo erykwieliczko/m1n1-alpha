@@ -453,6 +453,29 @@ void usb_iodev_init(void)
     }
 }
 
+int usb_iodev_handoff_console(u32 index)
+{
+    iodev_id_t id = IODEV_USB0 + index;
+    struct iodev *usb_iodev;
+
+    if (index >= USB_IODEV_COUNT || usb_dwc3_handoff_active())
+        return -1;
+
+    usb_iodev = iodev_unregister_device(id);
+    if (!usb_iodev)
+        return -1;
+
+    iodev_set_usage(IODEV_USB_VUART, 0);
+    iodev_usb_vuart.opaque = NULL;
+    if (usb_dwc3_handoff_export(usb_iodev->opaque) < 0) {
+        iodev_register_device(id, usb_iodev);
+        usb_iodev_vuart_setup(id);
+        return -1;
+    }
+
+    return 0;
+}
+
 void usb_iodev_shutdown(void)
 {
     for (int i = FIRST_USB_IODEV; i < USB_IODEV_COUNT; i++) {

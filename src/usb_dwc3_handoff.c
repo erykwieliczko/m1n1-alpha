@@ -5,6 +5,7 @@
 #include "usb_dwc3_handoff.h"
 #include "adt.h"
 #include "heapblock.h"
+#include "malloc.h"
 #include "memory.h"
 #include "soc.h"
 #include "string.h"
@@ -40,6 +41,8 @@ struct usb_dwc3_handoff_state {
     u32 rx_length;
     u64 retained_heap_start;
     u64 retained_heap_size;
+    void *page_tables[USB_DWC3_MAX_RETAINED_PAGE_TABLES];
+    size_t page_table_count;
     bool tx_busy;
     bool rx_busy;
     bool active;
@@ -97,6 +100,11 @@ static bool is_j713_t8132(void)
 
     return (target && (!strcmp(target, "J713AP") || !strcmp(target, "J713"))) ||
            adt_is_compatible(adt, 0, "J713AP");
+}
+
+bool usb_dwc3_handoff_supported(void)
+{
+    return is_j713_t8132();
 }
 
 static int get_adt_reg(const char *path_name, int index, u64 *base)
@@ -555,6 +563,99 @@ enum usb_dwc3_handoff_result usb_dwc3_handoff_adopt(const u64 *entry_args, size_
     return USB_DWC3_HANDOFF_ADOPTED;
 }
 
+int usb_dwc3_handoff_export(dwc3_dev_t *dev)
+{
+    struct usb_dwc3_export_state state;
+    struct usb_dwc3_handoff *descriptor;
+    u64 wdt_regs;
+    u64 retained_start;
+    u64 retained_end;
+
+    if (handoff.active || !is_j713_t8132())
+        return -1;
+    if (usb_dwc3_export_state(dev, &state) < 0)
+        return -1;
+    if (state.tx_endpoint != USB_DWC3_HANDOFF_TX_ENDPOINT ||
+        state.rx_endpoint != USB_DWC3_HANDOFF_RX_ENDPOINT)
+        return -1;
+    if (get_adt_reg("/arm-io/wdt", 0, &wdt_regs) < 0)
+        return -1;
+
+    descriptor = memalign(HANDOFF_DESCRIPTOR_ALIGNMENT, HANDOFF_DESCRIPTOR_ALIGNMENT);
+    if (!descriptor)
+        return -1;
+    memset(descriptor, 0, HANDOFF_DESCRIPTOR_ALIGNMENT);
+
+    descriptor->magic = USB_DWC3_HANDOFF_MAGIC;
+    descriptor->version = USB_DWC3_HANDOFF_VERSION;
+    descriptor->size = sizeof(*descriptor);
+    descriptor->regs_phys = state.regs_phys;
+    descriptor->event_buffer_phys = state.event_buffer_phys;
+    descriptor->event_buffer_size = state.event_buffer_size;
+    descriptor->event_buffer_offset = state.event_buffer_offset;
+    descriptor->scratchpad_phys = state.scratchpad_phys;
+    descriptor->scratchpad_size = state.scratchpad_size;
+    descriptor->xfer_buffer_phys = state.xfer_buffer_phys;
+    descriptor->xfer_buffer_size = state.xfer_buffer_size;
+    descriptor->trb_buffer_phys = state.trb_buffer_phys;
+    descriptor->trb_buffer_size = state.trb_buffer_size;
+    descriptor->tx_buffer_phys = state.tx_buffer_phys;
+    descriptor->tx_buffer_iova = state.tx_buffer_iova;
+    descriptor->tx_trb_phys = state.tx_trb_phys;
+    descriptor->tx_trb_iova = state.tx_trb_iova;
+    descriptor->tx_endpoint = state.tx_endpoint;
+    descriptor->tx_max_packet = state.tx_max_packet;
+    descriptor->tx_busy = state.tx_busy;
+    descriptor->stage = 2;
+    descriptor->rx_buffer_phys = state.rx_buffer_phys;
+    descriptor->rx_buffer_iova = state.rx_buffer_iova;
+    descriptor->rx_trb_phys = state.rx_trb_phys;
+    descriptor->rx_trb_iova = state.rx_trb_iova;
+    descriptor->wdt_regs_phys = wdt_regs;
+    descriptor->rx_endpoint = state.rx_endpoint;
+    descriptor->rx_busy = state.rx_busy;
+    descriptor->flags = USB_DWC3_HANDOFF_READY;
+    dc_cvac_range(descriptor, sizeof(*descriptor));
+    dma_wmb();
+
+    handoff.descriptor = descriptor;
+    memcpy(&handoff.snapshot, descriptor, sizeof(handoff.snapshot));
+    handoff.tx_trb = (struct dwc3_trb *)state.tx_trb_phys;
+    handoff.rx_trb = (struct dwc3_trb *)state.rx_trb_phys;
+    handoff.tx_buffer = (u8 *)state.tx_buffer_phys;
+    handoff.rx_buffer = (u8 *)state.rx_buffer_phys;
+    handoff.event_cursor = state.event_buffer_offset;
+    handoff.tx_busy = !!state.tx_busy;
+    handoff.rx_busy = !!state.rx_busy;
+    handoff.page_table_count = state.page_table_count;
+    memcpy(handoff.page_tables, state.page_tables,
+           state.page_table_count * sizeof(handoff.page_tables[0]));
+
+    retained_start = (u64)descriptor;
+    retained_end = retained_start + HANDOFF_DESCRIPTOR_ALIGNMENT;
+#define RETAIN_RANGE(start, size)                                                                  \
+    do {                                                                                           \
+        retained_start = min(retained_start, (u64)(start));                                        \
+        retained_end = max(retained_end, (u64)(start) + (u64)(size));                              \
+    } while (0)
+    RETAIN_RANGE(state.event_buffer_phys, state.event_buffer_size);
+    RETAIN_RANGE(state.scratchpad_phys, state.scratchpad_size);
+    RETAIN_RANGE(state.xfer_buffer_phys, state.xfer_buffer_size);
+    RETAIN_RANGE(state.trb_buffer_phys, state.trb_buffer_size);
+    for (size_t i = 0; i < state.page_table_count; ++i)
+        RETAIN_RANGE(state.page_tables[i], SZ_16K);
+#undef RETAIN_RANGE
+    handoff.retained_heap_start = ALIGN_DOWN(retained_start, SZ_16K);
+    handoff.retained_heap_size =
+        ALIGN_UP(retained_end, SZ_16K) - handoff.retained_heap_start;
+    handoff.active = true;
+    spin_init(&handoff_iodev.lock);
+    iodev_register_device(IODEV_USB0, &handoff_iodev);
+
+    publish_runtime_state();
+    return 0;
+}
+
 bool usb_dwc3_handoff_active(void)
 {
     return handoff.active;
@@ -626,7 +727,6 @@ void usb_dwc3_handoff_prepare_next_stage(void)
     if (!handoff.active)
         return;
 
-    iodev_flush(IODEV_USB0);
     publish_runtime_state();
     dma_wmb();
 }
@@ -634,6 +734,32 @@ void usb_dwc3_handoff_prepare_next_stage(void)
 static int reserve_fdt_range(void *fdt, u64 start, u64 size)
 {
     return fdt_add_mem_rsv(fdt, start, size);
+}
+
+static int reserve_fdt_memory_node(void *fdt, u64 start, u64 size)
+{
+    char name[64];
+    u64 reg[2] = {cpu_to_fdt64(start), cpu_to_fdt64(size)};
+    int parent;
+    int node;
+
+    parent = fdt_path_offset(fdt, "/reserved-memory");
+    if (parent < 0)
+        return parent;
+
+    snprintf(name, sizeof(name), "m1n1-dwc3-handoff@%lx", start);
+    node = fdt_subnode_offset(fdt, parent, name);
+    if (node == -FDT_ERR_NOTFOUND)
+        node = fdt_add_subnode(fdt, parent, name);
+    if (node < 0)
+        return node;
+
+    if (fdt_setprop(fdt, node, "reg", reg, sizeof(reg)) < 0 ||
+        fdt_setprop_string(fdt, node, "compatible",
+                           "linux-enablement-mac,m1n1-dwc3-handoff-memory") < 0)
+        return -1;
+
+    return 0;
 }
 
 int usb_dwc3_handoff_publish_fdt(void *fdt, int chosen)
@@ -644,10 +770,27 @@ int usb_dwc3_handoff_publish_fdt(void *fdt, int chosen)
     if (fdt_setprop_u64(fdt, chosen, USB_DWC3_HANDOFF_FDT_PROPERTY, (u64)handoff.descriptor) < 0)
         return -1;
 
-    if (handoff.retained_heap_size)
-        return reserve_fdt_range(fdt, handoff.retained_heap_start, handoff.retained_heap_size);
+    printf("FDT: DWC3 handoff descriptor %p, retained 0x%lx..0x%lx\n", handoff.descriptor,
+           handoff.retained_heap_start,
+           handoff.retained_heap_start + handoff.retained_heap_size);
 
-    if (reserve_fdt_range(fdt, (u64)handoff.descriptor, handoff.snapshot.size) < 0 ||
+    if (handoff.retained_heap_size) {
+        /*
+         * Keep the header reservation for pre-EFI consumers.  Linux's EFI
+         * stub intentionally removes header /memreserve/ entries and relies
+         * on the EFI memory map instead, so also publish a normal (mapped)
+         * reserved-memory child.  U-Boot then classifies it as boot-services
+         * memory and Linux keeps it in the linear map while excluding it from
+         * the page allocator.
+         */
+        if (reserve_fdt_range(fdt, handoff.retained_heap_start,
+                              handoff.retained_heap_size) < 0)
+            return -1;
+        return reserve_fdt_memory_node(fdt, handoff.retained_heap_start,
+                                       handoff.retained_heap_size);
+    }
+
+    if (reserve_fdt_range(fdt, (u64)handoff.descriptor, HANDOFF_DESCRIPTOR_ALIGNMENT) < 0 ||
         reserve_fdt_range(fdt, handoff.snapshot.event_buffer_phys,
                           handoff.snapshot.event_buffer_size) < 0 ||
         reserve_fdt_range(fdt, handoff.snapshot.scratchpad_phys, handoff.snapshot.scratchpad_size) <
@@ -657,6 +800,11 @@ int usb_dwc3_handoff_publish_fdt(void *fdt, int chosen)
         reserve_fdt_range(fdt, handoff.snapshot.trb_buffer_phys, handoff.snapshot.trb_buffer_size) <
             0)
         return -1;
+
+    for (size_t i = 0; i < handoff.page_table_count; ++i) {
+        if (reserve_fdt_range(fdt, (u64)handoff.page_tables[i], SZ_16K) < 0)
+            return -1;
+    }
 
     return 0;
 }

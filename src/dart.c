@@ -730,6 +730,48 @@ u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
     return DART_PTR_ERR;
 }
 
+size_t dart_collect_page_tables(dart_dev_t *dart, void **pages, size_t max_pages)
+{
+    size_t count = 0;
+
+    if (!dart)
+        return 0;
+
+    for (int ttbr = 0; ttbr < dart->params->ttbr_count; ++ttbr) {
+        u64 *l1 = dart->l1[ttbr];
+
+        if (!l1)
+            continue;
+        if (count >= max_pages)
+            return max_pages + 1;
+        pages[count++] = l1;
+
+        for (size_t i = 0; i < SZ_16K / sizeof(*l1); ++i) {
+            void *l2;
+            bool duplicate = false;
+
+            if (!(l1[i] & DART_PTE_VALID))
+                continue;
+            l2 = (void *)(FIELD_GET(dart->params->offset_mask, l1[i])
+                          << DART_PTE_OFFSET_SHIFT);
+
+            for (size_t j = 0; j < count; ++j) {
+                if (pages[j] == l2) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate)
+                continue;
+            if (count >= max_pages)
+                return max_pages + 1;
+            pages[count++] = l2;
+        }
+    }
+
+    return count;
+}
+
 void dart_shutdown(dart_dev_t *dart)
 {
     if (!dart->locked && !dart->keep)

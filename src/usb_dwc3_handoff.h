@@ -5,6 +5,7 @@
 
 #include "iodev.h"
 #include "types.h"
+#include "usb_dwc3.h"
 
 #define USB_DWC3_HANDOFF_MAGIC   0x33435744314e314dULL
 #define USB_DWC3_HANDOFF_VERSION 2
@@ -55,6 +56,8 @@ enum usb_dwc3_handoff_result {
 };
 
 enum usb_dwc3_handoff_result usb_dwc3_handoff_adopt(const u64 *entry_args, size_t entry_arg_count);
+bool usb_dwc3_handoff_supported(void);
+int usb_dwc3_handoff_export(dwc3_dev_t *dev);
 bool usb_dwc3_handoff_active(void);
 bool usb_dwc3_handoff_console_healthy(void);
 bool usb_dwc3_handoff_owns_controller(u32 index);

@@ -29,6 +29,7 @@ void *dart_translate(dart_dev_t *dart, uintptr_t iova);
 void *dart_translate_silent(dart_dev_t *dart, uintptr_t iova);
 u64 dart_search(dart_dev_t *dart, void *paddr);
 u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len);
+size_t dart_collect_page_tables(dart_dev_t *dart, void **pages, size_t max_pages);
 void dart_shutdown(dart_dev_t *dart);
 u64 dart_vm_base(dart_dev_t *dart);
 
