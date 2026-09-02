@@ -27,14 +27,11 @@
 #include "uart.h"
 #include "uartproxy.h"
 #include "usb.h"
-#include "usb_dwc3_handoff.h"
 #include "utils.h"
 #include "wdt.h"
 #include "xnuboot.h"
 
 struct vector_args next_stage;
-
-#define J713_CONSOLE_ATTACH_TIMEOUT_MS 10000
 
 const char version_tag[] = "##m1n1_ver##" BUILD_TAG;
 const char *const m1n1_version = version_tag + 12;
@@ -120,45 +117,6 @@ void run_actions(void)
 #endif
 #endif
 
-#ifndef BRINGUP
-    if (!usb_dwc3_handoff_active() && usb_dwc3_handoff_supported()) {
-        int node = adt_path_offset(adt, "/chosen/asmb");
-        u64 lp_sip0 = 0;
-
-        if (node >= 0)
-            ADT_GETPROP(adt, node, "lp-sip0", &lp_sip0);
-
-        if (lp_sip0 == 0) {
-            printf("J713 clean-room stage2: opening bounded DWC3 console attach window\n");
-            usb_init();
-            usb_iodev_init();
-            usb_up = true;
-            if (iodev_get_opaque(IODEV_USB0)) {
-                usb_iodev_vuart_setup(IODEV_USB0);
-
-                for (int elapsed = 0; elapsed < J713_CONSOLE_ATTACH_TIMEOUT_MS; elapsed += 10) {
-                    iodev_handle_events(IODEV_USB0);
-                    if (iodev_can_write(IODEV_USB_VUART)) {
-                        iodev_set_usage(IODEV_USB_VUART, USAGE_CONSOLE);
-                        printf("J713 clean-room stage2: ACM1 console selected\n");
-                        if (usb_iodev_handoff_console(0) < 0)
-                            printf("J713 clean-room stage2: unable to export DWC3 console\n");
-                        else
-                            printf("J713 clean-room stage2: DWC3 console handoff ready\n");
-                        break;
-                    }
-                    mdelay(10);
-                }
-            }
-
-            if (!usb_dwc3_handoff_active())
-                printf("J713 clean-room stage2: no ACM1 host; continuing without console handoff\n");
-        } else {
-            printf("J713 clean-room stage2: DWC3 console forbidden by sip0 policy\n");
-        }
-    }
-#endif
-
     printf("Checking for payloads...\n");
 
     if (payload_run() == 0) {
@@ -192,8 +150,6 @@ void m1n1_main(void)
     firmware_init();
 
     heapblock_init();
-    if (usb_dwc3_handoff_protect_heap() < 0)
-        panic("Inherited DWC3 allocations overlap the stage2 heap\n");
 
 #ifndef BRINGUP
     if (supports_gxf())
@@ -257,8 +213,6 @@ void m1n1_main(void)
 #endif
 
     printf("Vectoring to next stage...\n");
-
-    usb_dwc3_handoff_prepare_next_stage();
 
     next_stage.entry(next_stage.args[0], next_stage.args[1], next_stage.args[2], next_stage.args[3],
                      next_stage.args[4]);
