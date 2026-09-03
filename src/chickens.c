@@ -108,11 +108,15 @@ const struct midr_part_features features_m3 = {
     .counter_redirect = true,
 };
 
-// XXX figure out what features are actually available on M4
+/*
+ * AURORA_TODO: Determine the complete M4 / A18 Pro / M5 CPU feature set and
+ * implement the new sleep mode required for safe idle on these CPUs.
+ */
 const struct midr_part_features features_m4 = {
-    .sleep_mode = SLEEP_NONE, // XXX probably new mode required
+    .sleep_mode = SLEEP_NONE,
     .fast_ipi = true,
     .actlr_el2 = true,
+    .secondary_ctrr = true,
 };
 
 /*

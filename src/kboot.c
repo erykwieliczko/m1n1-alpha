@@ -3101,17 +3101,17 @@ int kboot_prepare_dt(void *fdt)
     if (fdt_add_mem_rsv(dt, (u64)_base, ((u64)_end) - ((u64)_base)))
         bail("FDT: couldn't add reservation for m1n1\n");
 
-    if (!cpu_features->apple_sysregs_unlocked) {
-        // On M4* / A18 Pro / M5*, there is a CTRR instance left enabled only
-        // on the secondary (non-boot) cores. Add a reserved-memory region to
-        // prevent Linux from crashing when allocating this memory and writing
-        // to it from a secondary core.
+    if (cpu_features->secondary_ctrr) {
+        /*
+         * M4 / A18 Pro / M5 secondary cores retain a CTRR-protected range.
+         * Keep the next stage from allocating and writing it from those cores.
+         */
         u64 ro_start = mrs(CTRR_M4_LWR_EL2);
         u64 ro_end = ALIGN_UP(mrs(CTRR_M4_UPR_EL2), SZ_4K);
         if (ro_end - ro_start > 12 * SZ_4K)
-            printf("WARNING: M4+ SMP-RO is large (48KB)");
+            printf("WARNING: CTRR_M4 SMP-RO is large (over 48 KiB)\n");
         if (fdt_add_mem_rsv(dt, ro_start, ro_end - ro_start))
-            bail("FDT: couldn't add reservation for M4+ SMP-RO CTRR area\n");
+            bail("FDT: couldn't reserve CTRR_M4 SMP-RO area\n");
     }
 
     if (dt_reserve_bootloader_handoff())
