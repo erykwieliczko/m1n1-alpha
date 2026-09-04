@@ -2813,7 +2813,15 @@ static int dt_set_t8132_nvme(void)
     if (!irqs || irq_len < 5 * sizeof(*irqs) || irq_len % sizeof(*irqs))
         bail("ADT: invalid ANS interrupt list\n");
 
-    ret = dt_set_adt_irqs("ans-mbox", irqs, 4);
+    /*
+     * The ANS ADT lists each FIFO pair as not-empty, empty.  Linux's ASC
+     * mailbox binding uses the semantic order empty, not-empty for both the
+     * AP-to-IOP and IOP-to-AP directions.  Copying the list positionally
+     * makes Linux enable the permanently asserted receive-empty interrupt as
+     * receive-not-empty and locks the CPU in an interrupt storm.
+     */
+    const u32 mbox_irqs[] = {irqs[1], irqs[0], irqs[3], irqs[2]};
+    ret = dt_set_adt_irqs("ans-mbox", mbox_irqs, ARRAY_SIZE(mbox_irqs));
     if (ret < 0)
         bail("FDT: failed to set ANS mailbox interrupts: %d\n", ret);
 
