@@ -2782,8 +2782,18 @@ static int dt_set_t8132_nvme(void)
         adt_get_reg(adt, ans_path, "reg", 9, &nvme_addr, &nvme_size) < 0)
         bail("ADT: failed to resolve T8132 ANS register ranges\n");
 
+    /*
+     * T8132's secure NVMe BAR is described as 64 KiB in the ADT, but its
+     * linear submission registers extend through offset 0x24910.  Linux
+     * needs that complete aperture while the child ANS control resource must
+     * stop before the independently-owned mailbox at ANS + 0x8000.
+     */
+    if (ans_size < 0x4000)
+        bail("ADT: T8132 ANS control aperture is too small\n");
+
     const u64 nvme_addrs[] = {nvme_addr, nvmmu_addr, ans_addr};
-    const u64 nvme_sizes[] = {nvme_size, nvmmu_size, ans_size};
+    const u64 nvme_sizes[] = {nvme_size < 0x40000 ? 0x40000 : nvme_size,
+                             nvmmu_size, 0x4000};
     int ret = dt_set_adt_regs("ans", nvme_addrs, nvme_sizes, ARRAY_SIZE(nvme_addrs));
     if (ret < 0)
         bail("FDT: failed to set ANS register ranges: %d\n", ret);
