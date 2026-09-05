@@ -497,6 +497,45 @@ static int dt_set_memory(void)
     return 0;
 }
 
+static int dt_reserve_bootloader_handoff(void)
+{
+    int node;
+
+    while ((node = fdt_node_offset_by_compatible(
+                dt, -1, "linux-enablement-mac,resident-bootloader")) >= 0) {
+        int len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+        if (!reg || len != 2 * (int)sizeof(*reg)) {
+            printf("FDT: invalid resident bootloader range on %s\n", fdt_get_name(dt, node, NULL));
+            return -1;
+        }
+
+        u64 start = fdt64_ld(&reg[0]);
+        u64 size = fdt64_ld(&reg[1]);
+        if (!size || (start | size) & (SZ_16K - 1)) {
+            printf("FDT: unaligned resident bootloader range on %s\n",
+                   fdt_get_name(dt, node, NULL));
+            return -1;
+        }
+
+        if (fdt_add_mem_rsv(dt, start, size))
+            return -1;
+
+        printf("FDT: reserved described bootloader handoff 0x%lx..0x%lx\n", start, start + size);
+
+        /*
+         * This node is packaging metadata, not an OS reserved-memory region.
+         * In particular it may cover the running kernel and initramfs, so a
+         * no-map property would make the handoff image itself inaccessible.
+         * Consume it after promoting the range to the FDT reservation map.
+         */
+        if (fdt_del_node(dt, node))
+            return -1;
+    }
+
+    return 0;
+}
+
 static int dt_set_serial_number(void)
 {
 
@@ -3080,8 +3119,45 @@ int kboot_prepare_dt(void *fdt)
     if (fdt_add_mem_rsv(dt, (u64)_base, ((u64)_end) - ((u64)_base)))
         bail("FDT: couldn't add reservation for m1n1\n");
 
+    if (cpu_features->secondary_ctrr) {
+        /*
+         * M4 / A18 Pro / M5 secondary cores retain a CTRR-protected range.
+         * Keep the next stage from allocating and writing it from those cores.
+         */
+        u64 ro_start = mrs(CTRR_M4_LWR_EL2);
+        u64 ro_end = ALIGN_UP(mrs(CTRR_M4_UPR_EL2), SZ_4K);
+        if (ro_end - ro_start > 12 * SZ_4K)
+            printf("WARNING: CTRR_M4 SMP-RO is large (over 48 KiB)\n");
+        if (fdt_add_mem_rsv(dt, ro_start, ro_end - ro_start))
+            bail("FDT: couldn't reserve CTRR_M4 SMP-RO area\n");
+    }
+
+    if (dt_reserve_bootloader_handoff())
+        bail("FDT: couldn't reserve described bootloader handoff\n");
+
     /* setup console log buffer early to capture as much log as possible */
     dt_setup_mtd_phram();
+
+    /*
+     * A RAM chainload can extend beyond m1n1's own image and contains pages
+     * that remain live through the U-Boot and EFI handoff.  Keep the complete
+     * producer-supplied high-water interval out of Linux's page allocator.
+     */
+    {
+        char node_name[64];
+        u64 protected_start = ALIGN_UP((u64)adt + cur_boot_args.devtree_size, SZ_16K);
+        u64 protected_end = cur_boot_args.top_of_kernel_data;
+
+        protected_start = min(protected_start, (u64)_base);
+        if (protected_end > protected_start) {
+            snprintf(node_name, sizeof(node_name), "m1n1-chainload@%lx", protected_start);
+            if (dt_get_or_add_reserved_mem(node_name,
+                                           "linux-enablement-mac,m1n1-chainload",
+                                           true, protected_start,
+                                           protected_end - protected_start) < 0)
+                bail("FDT: couldn't reserve the complete m1n1 chainload image\n");
+        }
+    }
 
     if (dt_set_chosen())
         return -1;
