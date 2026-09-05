@@ -78,6 +78,9 @@
 #define DART_T8110_TLB_CMD_OP_FLUSH_SID 1
 #define DART_T8110_TLB_CMD_STREAM       GENMASK(7, 0)
 
+#define DART_T8110_PARAMS2        0x4
+#define DART_T8110_PARAMS2_BYPASS BIT(0)
+
 #define DART_T8110_PROTECT          0x200
 #define DART_T8110_PROTECT_TTBR_TCR BIT(0)
 
@@ -339,6 +342,57 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
         dart->vm_base &= (1LLU << 36) - 1;
 
     return dart;
+}
+
+int dart_set_bypass_fdt(void *dt, u32 phandle, u8 device)
+{
+    int node = fdt_node_offset_by_phandle(dt, phandle);
+    if (node < 0) {
+        printf("dart: FDT node for phandle %u not found\n", phandle);
+        return -1;
+    }
+
+    const char *name = fdt_get_name(dt, node, NULL);
+    u64 base = dt_get_address(dt, node);
+    if (!base) {
+        printf("dart: Error getting FDT DART %s base address\n", name);
+        return -1;
+    }
+
+    if (fdt_node_check_compatible(dt, node, "apple,t8110-dart") || device >= dart_t8110.sid_count) {
+        printf("dart: FDT DART %s cannot bypass stream %u\n", name, device);
+        return -1;
+    }
+
+    if (read32(base + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR) {
+        printf("dart: FDT DART %s TTBR/TCR registers are locked\n", name);
+        return -1;
+    }
+
+    if (!(read32(base + DART_T8110_PARAMS2) & DART_T8110_PARAMS2_BYPASS)) {
+        printf("dart: FDT DART %s does not support bypass\n", name);
+        return -1;
+    }
+
+    write32(base + DART_T8110_ENABLE_STREAMS + 4 * (device >> 5), BIT(device & 31));
+    write32(base + DART_T8110_TCR_OFF + 4 * device, dart_t8110.tcr_disabled);
+
+    u32 tcr = read32(base + DART_T8110_TCR_OFF + 4 * device);
+    /*
+     * AURORA_TODO: Find a reliable way to read back or otherwise verify the
+     * DAPF-stage bypass request.
+     *
+     * T8132's DAPF bypass request does not remain set in the readable TCR,
+     * while the DART bypass bit does. Request both stages, but validate the
+     * persistent DART state.
+     */
+    if (!(tcr & DART_T8110_TCR_BYPASS_DART)) {
+        printf("dart: FDT DART %s failed to bypass stream %u (TCR 0x%x)\n", name, device, tcr);
+        return -1;
+    }
+
+    printf("dart: FDT DART %s stream %u is in bypass\n", name, device);
+    return 0;
 }
 
 void dart_lock_adt(const char *path, int instance)
