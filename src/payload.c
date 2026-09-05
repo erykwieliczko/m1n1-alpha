@@ -14,6 +14,7 @@
 #include "mitigations.h"
 #include "smp.h"
 #include "utils.h"
+#include "wdt.h"
 
 #include "libfdt/libfdt.h"
 #include "minilzlib/minlzma.h"
@@ -43,6 +44,61 @@ static char expect_compatible[256];
 static struct kernel_header *kernel = NULL;
 static void *fdt = NULL;
 static char *chainload_spec = NULL;
+
+static int set_preloaded_efi_address(void)
+{
+    const fdt32_t *size_prop;
+    const fdt64_t *offset_prop;
+    const fdt64_t *address_prop;
+    u64 image_size, offset, size;
+    int chosen, len;
+
+    chosen = fdt_path_offset(fdt, "/chosen");
+    if (chosen < 0)
+        return 0;
+
+    offset_prop = fdt_getprop(fdt, chosen, "u-boot,preloaded-efi-offset", &len);
+    if (!offset_prop)
+        return 0;
+    if (len != sizeof(*offset_prop)) {
+        printf("Invalid preloaded EFI offset property\n");
+        return -1;
+    }
+
+    size_prop = fdt_getprop(fdt, chosen, "u-boot,preloaded-efi-size", &len);
+    if (!size_prop || len != sizeof(*size_prop)) {
+        printf("Invalid preloaded EFI size property\n");
+        return -1;
+    }
+
+    address_prop = fdt_getprop(fdt, chosen, "u-boot,preloaded-efi-address", &len);
+    if (!address_prop || len != sizeof(*address_prop)) {
+        printf("Missing preloaded EFI address placeholder\n");
+        return -1;
+    }
+
+    image_size = kernel->image_size;
+    offset = fdt64_to_cpu(*offset_prop);
+    size = fdt32_to_cpu(*size_prop);
+    if (size < 2 || offset > image_size || size > image_size - offset) {
+        printf("Preloaded EFI range 0x%lx+0x%lx exceeds kernel image 0x%lx\n", offset, size,
+               image_size);
+        return -1;
+    }
+
+    if (((u8 *)kernel)[offset] != 'M' || ((u8 *)kernel)[offset + 1] != 'Z') {
+        printf("Invalid preloaded EFI image signature\n");
+        return -1;
+    }
+
+    if (kboot_set_chosen_u64_inplace("u-boot,preloaded-efi-address", (u64)kernel + offset)) {
+        printf("Failed to publish preloaded EFI address\n");
+        return -1;
+    }
+
+    printf("Preloaded EFI payload at %p (0x%lx bytes)\n", (u8 *)kernel + offset, size);
+    return 0;
+}
 
 static void *load_one_payload(void *start, size_t size);
 
@@ -346,6 +402,11 @@ int payload_run(void)
             printf("Failed to prepare FDT!\n");
             return -1;
         }
+
+        if (set_preloaded_efi_address())
+            return -1;
+
+        wdt_checkpoint("FDT preparation complete");
 
         return kboot_boot(kernel);
     } else if (kernel && !fdt) {
