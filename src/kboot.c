@@ -3257,8 +3257,18 @@ int kboot_boot(void *kernel)
     clk_init();
 
     usb_init();
-    pcie_init();
-    dapf_init_all();
+    int described_pcie = pcie_prepare_fdt(dt);
+    if (described_pcie < 0)
+        panic("Failed to enable described PCIe endpoint power\n");
+    if (pcie_init() && described_pcie)
+        panic("Failed to initialize described PCIe endpoint\n");
+    if (pcie_handoff_fdt(dt) < 0)
+        panic("Failed to prepare described PCIe endpoint DMA\n");
+    int dapf_result = dapf_init_all_fdt(dt);
+    int chosen = fdt_path_offset(dt, "/chosen");
+    if (dapf_result < 0 && chosen >= 0 &&
+        fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL))
+        panic("Failed to prepare described DAPF handoff\n");
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
