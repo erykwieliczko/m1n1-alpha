@@ -9,6 +9,8 @@
 #include "string.h"
 #include "utils.h"
 
+#include "libfdt/libfdt.h"
+
 struct dapf_t8020_config {
     u64 start;
     u64 end;
@@ -167,25 +169,64 @@ int dapf_init(const char *path, int index)
 
 struct entry {
     const char *path;
+    const char *consumer;
     int index;
 };
 
 struct entry dapf_entries[] = {
-    {"/arm-io/dart-aop", 1}, {"/arm-io/dart-mtp", 1},  {"/arm-io/dart-pmp", 1},
-    {"/arm-io/dart-isp", 5}, {"/arm-io/dart-isp0", 5}, {NULL, -1},
+    {"/arm-io/dart-aop", "/arm-io/aop", 1},   {"/arm-io/dart-mtp", "/arm-io/mtp", 1},
+    {"/arm-io/dart-pmp", "/arm-io/pmp", 1},   {"/arm-io/dart-isp", "/arm-io/isp", 5},
+    {"/arm-io/dart-isp0", "/arm-io/isp0", 5}, {NULL, NULL, -1},
 };
 
-int dapf_init_all(void)
+int dapf_init_all_fdt(void *dt)
 {
     int ret = 0;
     int count = 0;
     struct entry *entry = dapf_entries;
+    int chosen = dt ? fdt_path_offset(dt, "/chosen") : -1;
+    bool described =
+        chosen >= 0 && fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL);
 
     while (entry->path != NULL) {
         if (adt_path_offset(adt, entry->path) < 0) {
             entry++;
             continue;
         }
+
+        if (described) {
+            if (fdt_stringlist_search(dt, chosen, "linux-enablement-mac,dapf-handoff",
+                                      entry->consumer) < 0) {
+                printf("dapf: Skipping %s; consumer %s is not requested for handoff\n", entry->path,
+                       entry->consumer);
+                entry++;
+                continue;
+            }
+
+            if (fdt_stringlist_search(dt, chosen, "linux-enablement-mac,dapf-power-on-handoff",
+                                      entry->consumer) >= 0) {
+                if (pmgr_adt_power_enable(entry->consumer) < 0) {
+                    printf("dapf: Failed to power requested consumer %s\n", entry->consumer);
+                    ret = -1;
+                    entry++;
+                    continue;
+                }
+                printf("dapf: Preserving requested consumer %s in the active state\n",
+                       entry->consumer);
+            }
+
+            int powered = pmgr_adt_is_powered(entry->consumer);
+            if (!powered) {
+                printf("dapf: Skipping %s; consumer %s is inactive\n", entry->path,
+                       entry->consumer);
+                entry++;
+                continue;
+            }
+            if (powered < 0)
+                printf("dapf: Cannot determine state of %s; initializing it as requested\n",
+                       entry->consumer);
+        }
+
         if (dapf_init(entry->path, entry->index) < 0) {
             ret = -1;
         }
@@ -193,4 +234,9 @@ int dapf_init_all(void)
         count += 1;
     }
     return ret ? ret : count;
+}
+
+int dapf_init_all(void)
+{
+    return dapf_init_all_fdt(NULL);
 }
