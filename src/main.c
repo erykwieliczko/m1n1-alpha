@@ -178,11 +178,8 @@ void m1n1_main(void)
     fb_init(!is_mac);
     fb_display_logo();
     wdt_checkpoint("framebuffer initialization complete");
-#ifdef FB_SILENT_MODE
-    fb_set_active(!cur_boot_args.video.display);
-#else
+    // Keep boot failures visible on-screen, including in release builds.
     fb_set_active(true);
-#endif
 #endif
 
     cpufreq_fixup();

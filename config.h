@@ -5,8 +5,6 @@
 
 // Enable framebuffer console
 #define USE_FB
-// Disable framebuffer console unless verbose boot is enabled
-//#define FB_SILENT_MODE
 // Initialize USB early and break into proxy if device is opened within this time (sec)
 //#define EARLY_PROXY_TIMEOUT 5
 
@@ -27,7 +25,6 @@
 // #define USE_DEBUG_USB
 
 #ifdef RELEASE
-# define FB_SILENT_MODE
 # ifdef CHAINLOADING
 #  define EARLY_PROXY_TIMEOUT 5
 # endif
