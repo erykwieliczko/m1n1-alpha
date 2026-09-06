@@ -708,7 +708,7 @@ class M1N1Proxy(Reloadable):
         req = struct.pack("<7Q", opcode, *args)
         if self.debug:
             print("<<<< %08x: %08x %08x %08x %08x %08x %08x"%tuple([opcode] + args))
-        reply = self.iface.proxyreq(req, reboot=reboot, no_reply=no_reply, pre_reply=None)
+        reply = self.iface.proxyreq(req, reboot=reboot, no_reply=no_reply, pre_reply=pre_reply)
         if no_reply or reboot and reply is None:
             return
         ret_fmt = "q" if signed else "Q"
@@ -789,6 +789,8 @@ class M1N1Proxy(Reloadable):
     def set_baud(self, baudrate):
         self.iface.tty_enable = False
         def change():
+            # The SET_BAUD request itself must leave at the old baud rate.
+            self.iface.dev.flush()
             self.iface.dev.baudrate = baudrate
         try:
             self.request(self.P_SET_BAUD, baudrate, 16, 0x005aa5f0, pre_reply=change)
