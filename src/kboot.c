@@ -3207,7 +3207,8 @@ int kboot_prepare_dt(void *fdt)
             printf("FDT: J700 single boot CPU MPIDR=0x%lx\n", mpidr);
         }
         if (fdt_get_alias(dt, "mtp")) {
-            if (dt_reserve_asc_firmware("/arm-io/mtp", NULL, "mtp", false, 0) ||
+            /* The ASC's internal VAs are not MTP DART device addresses. */
+            if (dt_reserve_asc_firmware("/arm-io/mtp", NULL, "mtp", true, 0) ||
                 dt_set_ipd() || dapf_init("/arm-io/dart-mtp", 1))
                 return -1;
         }
