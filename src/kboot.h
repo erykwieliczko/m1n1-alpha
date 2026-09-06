@@ -24,6 +24,7 @@ void kboot_set_initrd(void *start, size_t size);
 int kboot_set_chosen(const char *name, const char *value);
 int kboot_set_chosen_u64_inplace(const char *name, u64 value);
 int kboot_set_uboot(const char *name, const char *value);
+bool kboot_is_display_only(const void *fdt);
 int kboot_prepare_dt(void *fdt);
 int kboot_boot(void *kernel);
 

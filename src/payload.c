@@ -370,8 +370,10 @@ int payload_run(void)
     }
 
     if (kernel && fdt) {
-        cpufreq_init();
-        smp_start_secondaries();
+        if (!kboot_is_display_only(fdt)) {
+            cpufreq_init();
+            smp_start_secondaries();
+        }
         mitigations_perform();
         if (enable_tso) {
 

@@ -3094,15 +3094,30 @@ static int dt_setup_mtd_phram(void)
     return 0;
 }
 
+bool kboot_is_display_only(const void *fdt)
+{
+    /* Explicit early-bringup contract, not a reduced boot path for other Macs. */
+    if (chip_id != T8140 || board_id != 0x64 ||
+        fdt_node_check_compatible(fdt, 0, "apple,j700") ||
+        fdt_node_check_compatible(fdt, 0, "apple,t8140"))
+        return false;
+
+    int chosen = fdt_path_offset(fdt, "/chosen");
+    return chosen >= 0 && fdt_getprop(fdt, chosen, "asahi,display-only", NULL);
+}
+
 int kboot_prepare_dt(void *fdt)
 {
+    bool display_only = kboot_is_display_only(fdt);
+
     if (dt) {
         free(dt);
         dt = NULL;
     }
 
     /* Need to init ISP early to carve out heap */
-    isp_init();
+    if (!display_only)
+        isp_init();
 
     dt_bufsize = fdt_totalsize(fdt);
     assert(dt_bufsize);
@@ -3167,6 +3182,11 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_smbios())
         return -1;
+    /* Keep the normal live-memory/FB fixups and all handoff reservations,
+     * but do not initialize or describe unimplemented J700 peripherals.
+     */
+    if (display_only)
+        goto prepare_memory;
     if (dt_set_cpus())
         return -1;
     if (dt_set_mac_addresses())
@@ -3235,6 +3255,7 @@ int kboot_prepare_dt(void *fdt)
      * in one of the above devicetree prep functions, and we want an up-to-date value
      * for the usable memory span to make it into the devicetree.
      */
+prepare_memory:
     if (dt_set_memory())
         return -1;
 
@@ -3250,7 +3271,7 @@ int kboot_prepare_dt(void *fdt)
     return 0;
 }
 
-int kboot_boot(void *kernel)
+static void kboot_prepare_devices(void)
 {
     mcc_enable_cache();
     tunables_apply_static();
@@ -3269,6 +3290,14 @@ int kboot_boot(void *kernel)
     if (dapf_result < 0 && chosen >= 0 &&
         fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL))
         panic("Failed to prepare described DAPF handoff\n");
+}
+
+int kboot_boot(void *kernel)
+{
+    if (kboot_is_display_only(dt))
+        printf("J700: preserving inherited display and UART; peripheral bringup deferred\n");
+    else
+        kboot_prepare_devices();
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);

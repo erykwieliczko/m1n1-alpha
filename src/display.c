@@ -652,7 +652,9 @@ int display_init(void)
         fb_clear_direct(); // Old m1n1 stage1 ends up with an ugly logo situation, clear it.
         return display_configure(NULL);
 #ifndef CHAINLOADING
-    } else if (!has_notch && firmware_sfw_in_range(V15_0B1, FW_MAX) &&
+    /* T8140's mBoot version is unknown to the firmware table; preserve its
+     * initialized display instead of entering the older-Mac workaround. */
+    } else if (chip_id != T8140 && !has_notch && firmware_sfw_in_range(V15_0B1, FW_MAX) &&
                os_firmware.version < V15_0B1) {
         printf("display: Internal display on t8103 or t8112 with Sequoia SFW, power cycling\n");
         display_needs_power_cycle = true;
