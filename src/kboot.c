@@ -2759,11 +2759,11 @@ static int dt_set_adt_irqs(const char *alias, const u32 *irqs, size_t count)
 }
 
 /*
- * M4 exposes a separate NVMMU window.  Its physical layout is supplied by
+ * M4 and T8140 expose a separate NVMMU window. Its physical layout is supplied by
  * iBoot's live ADT, so transfer it instead of encoding machine-specific
  * addresses in the Linux devicetree.
  */
-static int dt_set_t8132_nvme(void)
+static int dt_set_ans_nvme(bool polled)
 {
     const char *ans_dt_path = fdt_get_alias(dt, "ans");
     if (!ans_dt_path)
@@ -2780,16 +2780,16 @@ static int dt_set_t8132_nvme(void)
     if (adt_get_reg(adt, ans_path, "reg", 0, &ans_addr, &ans_size) < 0 ||
         adt_get_reg(adt, ans_path, "reg", 3, &nvmmu_addr, &nvmmu_size) < 0 ||
         adt_get_reg(adt, ans_path, "reg", 9, &nvme_addr, &nvme_size) < 0)
-        bail("ADT: failed to resolve T8132 ANS register ranges\n");
+        bail("ADT: failed to resolve ANS register ranges\n");
 
     /*
-     * T8132's secure NVMe BAR is described as 64 KiB in the ADT, but its
+     * T8132/T8140's secure NVMe BAR is described as 64 KiB in the ADT, but its
      * linear submission registers extend through offset 0x24910.  Linux
      * needs that complete aperture while the child ANS control resource must
      * stop before the independently-owned mailbox at ANS + 0x8000.
      */
     if (ans_size < 0x4000)
-        bail("ADT: T8132 ANS control aperture is too small\n");
+        bail("ADT: ANS control aperture is too small\n");
 
     const u64 nvme_addrs[] = {nvme_addr, nvmmu_addr, ans_addr};
     const u64 nvme_sizes[] = {nvme_size < 0x40000 ? 0x40000 : nvme_size,
@@ -2800,7 +2800,7 @@ static int dt_set_t8132_nvme(void)
 
     int ans_dt = fdt_path_offset(dt, ans_dt_path);
     if (ans_dt < 0 || fdt_setprop_string(dt, ans_dt, "status", "okay") < 0)
-        bail("FDT: failed to enable T8132 ANS\n");
+        bail("FDT: failed to enable ANS\n");
 
     const u64 mbox_addrs[] = {ans_addr + 0x8000};
     const u64 mbox_sizes[] = {0x4000};
@@ -2817,6 +2817,12 @@ static int dt_set_t8132_nvme(void)
     ret = dt_set_adt_regs("sart-ans", &sart_addr, &sart_size, 1);
     if (ret < 0)
         bail("FDT: failed to set ANS SART range: %d\n", ret);
+
+    /* The minimal J700 U-Boot console polls; IRQ semantics are not yet validated. */
+    if (polled) {
+        printf("FDT: Transferred polled ANS/NVMMU/SART resources from ADT\n");
+        return 0;
+    }
 
     u32 irq_len;
     const u32 *irqs = adt_getprop(adt, ans, "interrupts", &irq_len);
@@ -3191,6 +3197,11 @@ int kboot_prepare_dt(void *fdt)
                 dt_set_ipd() || dapf_init("/arm-io/dart-mtp", 1))
                 return -1;
         }
+        if (fdt_get_alias(dt, "ans")) {
+            if (dt_set_ans_nvme(true) ||
+                dt_reserve_asc_firmware("/arm-io/ans/iop-ans-nub", NULL, "ans", true, 0))
+                return -1;
+        }
         goto prepare_memory;
     }
     if (dt_set_cpus())
@@ -3237,7 +3248,7 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_pmgr())
         return -1;
-    if (dt_set_t8132_nvme())
+    if (dt_set_ans_nvme(false))
         return -1;
     if (dt_set_t8132_lifecycle())
         return -1;

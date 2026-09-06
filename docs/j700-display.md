@@ -40,3 +40,25 @@ RAM upload for testing does not alter installed stage1 or imply persistent
 disk boot has been installed. U-Boot can add the built-in MTP keyboard without
 changing this boot ABI. SMP, storage, USB, reset and an OS boot
 remain separate bring-up milestones.
+
+## Optional polled ANS storage handoff
+
+When the minimal FDT supplies `ans`, `ans-mbox` and `sart-ans` aliases, stage2
+transfers the secure NVMe BAR, separate NVMMU, ASC control, mailbox and SART
+resources from the live ADT. T8140's linear submission registers extend beyond
+the advertised 64-KiB secure BAR, so the NVMe aperture is expanded to 256 KiB,
+as on T8132. The mailbox is split from ASC control and only SART's first
+resource is transferred; its third window overlaps the separate NVMMU.
+
+The ANS firmware segments come from `/arm-io/ans/iop-ans-nub` and are described
+as reserved memory. This minimal path does not initialize m1n1's NVMe driver,
+reset ANS, or apply the T8132 PMGR readback workaround. The uninitialized
+`nvme_shutdown()` path leaves inherited firmware untouched. On the tested RAM
+boot, ASC is running while standard NVMe queues are disabled; U-Boot wakes
+RTKit and owns the new queues and shared buffers.
+
+No mailbox/NVMe interrupt properties are synthesized for this polled U-Boot
+milestone: Neo's interrupt semantics and native Linux storage takeover remain
+unvalidated. The existing normal T8132 handoff still transfers its IRQs with
+the same ordering as before. See U-Boot's `doc/board/apple/j700.rst` for the
+storage test procedure and limits.
