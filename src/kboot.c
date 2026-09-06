@@ -3192,6 +3192,20 @@ int kboot_prepare_dt(void *fdt)
      * but do not initialize or describe unimplemented J700 peripherals.
      */
     if (display_only) {
+        /* Optional single-CPU Linux bring-up. No secondary release addresses
+         * are valid in this path: payload_run() leaves the other CPUs parked.
+         * Derive the one boot CPU's MPIDR from hardware, not ADT's logical ID.
+         */
+        int boot_cpu = fdt_path_offset(dt, "/cpus/cpu@0");
+        if (boot_cpu >= 0) {
+            u64 mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
+            char name[32];
+            snprintf(name, sizeof(name), "cpu@%lx", mpidr);
+            if (fdt_setprop_inplace_u64(dt, boot_cpu, "reg", mpidr) ||
+                fdt_set_name(dt, boot_cpu, name))
+                bail("FDT: failed to describe J700 boot CPU\n");
+            printf("FDT: J700 single boot CPU MPIDR=0x%lx\n", mpidr);
+        }
         if (fdt_get_alias(dt, "mtp")) {
             if (dt_reserve_asc_firmware("/arm-io/mtp", NULL, "mtp", false, 0) ||
                 dt_set_ipd() || dapf_init("/arm-io/dart-mtp", 1))
