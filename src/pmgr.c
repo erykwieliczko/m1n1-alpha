@@ -343,11 +343,32 @@ static int pmgr_reset_device(int die, const struct pmgr_device *dev)
 
     printf("pmgr: resetting device %d.%s\n", die, dev->name);
 
+    /* HACK: J713 disk boots intermittently hang during SART cleanup after the
+     * ANS reset (roughly 10% observed failure rate). Reading ANS, APCIE_ST and
+     * APCIE_SYS_ST before and after reset has prevented this in reboot tests.
+     * Why these reads help is unknown; this is a workaround, not a root-cause
+     * fix or a proven hardware readback requirement. Keep the gate J713-only.
+     * read32() is volatile assembly even when its return value is discarded.
+     */
+    bool readback_storage = chip_id == T8132 && board_id == 0x2c && die == 0 &&
+                            addr == 0x380700538 && !strcmp(dev->name, "ANS");
+    if (readback_storage) {
+        (void)read32(addr);
+        (void)read32(addr + 8);
+        (void)read32(addr + 16);
+    }
+
     set32(addr, PMGR_DEV_DISABLE);
     set32(addr, PMGR_RESET);
     udelay(10);
     clear32(addr, PMGR_RESET);
     clear32(addr, PMGR_DEV_DISABLE);
+
+    if (readback_storage) {
+        (void)read32(addr);
+        (void)read32(addr + 8);
+        (void)read32(addr + 16);
+    }
 
     return 0;
 }
