@@ -14,7 +14,10 @@ chainload and CTRR reservations, live usable-memory bounds, framebuffer fixup,
 firmware metadata and machine identity. It does not run ISP initialization or
 peripheral/CPU topology fixups. Kernel handoff skips the later MCC/clock/tunable,
 USB, PCIe and DAPF initialization, then uses the normal next-stage entry and
-exception/cache/MMU teardown. This intentionally preserves inherited scanout
+exception/cache/MMU teardown. When the FDT supplies an `mtp` alias, preparation
+also reserves the live MTP `segment-ranges`, propagates the keyboard layout,
+and initializes only `/arm-io/dart-mtp`'s ADT-described DAPF. m1n1 does not start
+MTP or consume its HID protocol; U-Boot owns that session. This preserves inherited scanout
 without pretending unimplemented devices are ready for an OS.
 
 The ordinary early stage2 initialization still runs. T8140 is excluded from
@@ -34,5 +37,6 @@ loader place U-Boot at its required alignment.
 The initial console uses the inherited physical UART at 115200 baud and the
 inherited 32-bit framebuffer. It requires no active host to draw on screen.
 RAM upload for testing does not alter installed stage1 or imply persistent
-disk boot has been installed. SMP, keyboard, storage, USB, reset and an OS boot
+disk boot has been installed. U-Boot can add the built-in MTP keyboard without
+changing this boot ABI. SMP, storage, USB, reset and an OS boot
 remain separate bring-up milestones.

@@ -3185,8 +3185,14 @@ int kboot_prepare_dt(void *fdt)
     /* Keep the normal live-memory/FB fixups and all handoff reservations,
      * but do not initialize or describe unimplemented J700 peripherals.
      */
-    if (display_only)
+    if (display_only) {
+        if (fdt_get_alias(dt, "mtp")) {
+            if (dt_reserve_asc_firmware("/arm-io/mtp", NULL, "mtp", false, 0) ||
+                dt_set_ipd() || dapf_init("/arm-io/dart-mtp", 1))
+                return -1;
+        }
         goto prepare_memory;
+    }
     if (dt_set_cpus())
         return -1;
     if (dt_set_mac_addresses())
